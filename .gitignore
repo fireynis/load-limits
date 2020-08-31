@@ -1,0 +1,3 @@
+/cmd/web/.env
+/cmd/cli/.env
+.idea
