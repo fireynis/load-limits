@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fireynis/velocity_checker/pkg/helpers"
 	"fireynis/velocity_checker/pkg/models"
 	"fireynis/velocity_checker/pkg/models/postgres"
+	"fireynis/velocity_checker/pkg/validators"
 	"flag"
 	"fmt"
 	"github.com/jackc/pgx/v4"
@@ -13,13 +15,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
 type application struct {
-	loads models.ILoads
+	loads         models.ILoads
+	loadValidator validators.ILoadValidator
 }
 
 func main() {
@@ -59,7 +60,8 @@ func main() {
 	defer dbConn.Close(context.Background())
 
 	app := &application{
-		loads: &postgres.LoadModel{DB: dbConn},
+		loads:         &postgres.LoadModel{DB: dbConn},
+		loadValidator: &validators.LoadValidator{},
 	}
 
 	router := http.NewServeMux()
@@ -78,7 +80,7 @@ func (a *application) parseLoad(w http.ResponseWriter, r *http.Request) {
 
 	decoder := json.NewDecoder(r.Body)
 
-	var inData loadJson
+	var inData helpers.ImportLoad
 
 	err := decoder.Decode(&inData)
 
@@ -87,33 +89,17 @@ func (a *application) parseLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transactionId, err := strconv.ParseInt(inData.TransactionId, 10, 64)
+	load, err := helpers.InputToLoad(inData)
+
 	if err != nil {
-		log.Printf("Unable to parse json. %s.", err)
-		http.Error(w, fmt.Sprintf("Unable to parse json. %s.", err), 403)
+		http.Error(w, fmt.Sprintf("Data in is incorrect. %s", err), 403)
 		return
 	}
 
-	customerId, err := strconv.ParseInt(inData.CustomerId, 10, 64)
-	if err != nil {
-		log.Printf("Unable to parse json. %s", err)
-		http.Error(w, fmt.Sprintf("Unable to parse json. %s", err), 403)
-		return
-	}
-
-	cleanedAmount, err := strconv.ParseFloat(strings.ReplaceAll(inData.Amount, "$", ""), 64)
-	if err != nil {
-		log.Printf("Unable to parse json. %s", err)
-		http.Error(w, fmt.Sprintf("Unable to parse json. %s", err), 403)
-		return
-	}
-	intAmount := int64(cleanedAmount * 100)
-
-	_, err = a.loads.GetByTransactionId(customerId, transactionId)
+	_, err = a.loads.GetByTransactionId(load.CustomerId, load.TransactionId)
 	//Ignoring a second load with the same id on a customer
 	if err == nil {
-		_, _ = w.Write([]byte("Record already exists"))
-		http.Error(w, fmt.Sprintf("Record already exists"), 403)
+		http.Error(w, "Record already exists", 403)
 		return
 	} else if !errors.Is(err, models.ErrNoRecord) {
 		log.Printf("Error checking for duplicate record. %s", err)
@@ -121,18 +107,31 @@ func (a *application) parseLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inData.Accepted = a.loads.WithinLimits(customerId, intAmount, inData.Time)
+	startDate := time.Date(load.Time.Year(), load.Time.Month(), load.Time.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(load.Time.Year(), load.Time.Month(), load.Time.Day(), 23, 59, 59, 999, time.UTC)
+	loadModels, err := a.loads.GetByCustomerTransactionsByDateRange(load.CustomerId, startDate, endDate)
+	if err != nil {
+		if errors.Is(err, models.ErrNoRecord) {
+			load.Accepted = true
+		} else {
+			http.Error(w, fmt.Sprintf("Error retrieving data. %s", err), 500)
+			return
+		}
+	}
+	load.Accepted = a.loadValidator.LessThanThreeLoadsDaily(loadModels) &&
+		a.loadValidator.LessThanFiveThousandLoadedDaily(loadModels, &load) &&
+		a.loadValidator.LessThanTwentyThousandLoadedWeekly(loadModels, &load)
 
-	_, err = a.loads.Insert(customerId, transactionId, intAmount, inData.Time, inData.Accepted)
+	_, err = a.loads.Insert(&load)
 	if err != nil {
 		log.Printf("Unable to insert into loads table. %s", err)
 		http.Error(w, fmt.Sprintf("Unable to insert into loads table. %s", err), 500)
 		return
 	}
 	outJson, err := json.Marshal(jsonOutput{
-		Id:         transactionId,
-		CustomerId: customerId,
-		Accepted:   inData.Accepted,
+		Id:         load.TransactionId,
+		CustomerId: load.CustomerId,
+		Accepted:   load.Accepted,
 	})
 	if err != nil {
 		log.Printf("Unable to marshall output json. %s", err)
@@ -142,14 +141,6 @@ func (a *application) parseLoad(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(outJson)
-}
-
-type loadJson struct {
-	TransactionId string    `json:"id"`
-	CustomerId    string    `json:"customer_id"`
-	Amount        string    `json:"load_amount"`
-	Time          time.Time `json:"time"`
-	Accepted      bool      `json:"-"`
 }
 
 type jsonOutput struct {

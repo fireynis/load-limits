@@ -21,7 +21,6 @@ type ILoads interface {
 	Get(id int64) (*Load, error)
 	GetByTransactionId(customerId int64, transactionId int64) (*Load, error)
 	GetByCustomerTransactionsByDateRange(customerId int64, startDate time.Time, endDate time.Time) ([]*Load, error)
-	Insert(customerId int64, transactionId int64, amount int64, transactionTime time.Time, accepted bool) (int64, error)
+	Insert(load *Load) (int64, error)
 	Update(model *Load) error
-	WithinLimits(customerId int64, amount int64, transactionTime time.Time) bool
 }

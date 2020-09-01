@@ -43,7 +43,11 @@ func (m *LoadModel) GetByCustomerTransactionsByDateRange(customerId int64, start
 		var tempModel models.Load
 		err := rows.Scan(&tempModel.Id, &tempModel.CustomerId, &tempModel.TransactionId, &tempModel.Amount, &tempModel.Time, &tempModel.Accepted)
 		if err != nil {
-			return nil, err
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, models.ErrNoRecord
+			} else {
+				return nil, err
+			}
 		}
 		loadModels = append(loadModels, &tempModel)
 	}
@@ -51,13 +55,14 @@ func (m *LoadModel) GetByCustomerTransactionsByDateRange(customerId int64, start
 }
 
 //Insert saves the record to the database
-func (m *LoadModel) Insert(customerId int64, transactionId int64, amount int64, transactionTime time.Time, accepted bool) (int64, error) {
+func (m *LoadModel) Insert(load *models.Load) (int64, error) {
 	stmt := "INSERT INTO loads (customer_id, transaction_id, load_amount, transaction_time, accepted) VALUES ($1, $2, $3, $4, $5) RETURNING id"
 	var lastInsertId int64
-	err := m.DB.QueryRow(context.Background(), stmt, customerId, transactionId, amount, transactionTime, accepted).Scan(&lastInsertId)
+	err := m.DB.QueryRow(context.Background(), stmt, load.CustomerId, load.TransactionId, load.Amount, load.Time, load.Accepted).Scan(&lastInsertId)
 	if err != nil {
 		return 0, err
 	}
+	load.Id = lastInsertId
 	return lastInsertId, nil
 }
 
@@ -67,48 +72,6 @@ func (m *LoadModel) Update(model *models.Load) error {
 	//Using Exec as I don't need to know anything other than if it works, which the Error will determine
 	_, err := m.DB.Exec(context.Background(), stmt, model.CustomerId, model.TransactionId, model.Amount, model.Time, model.Accepted, model.Id)
 	return err
-}
-
-func (m *LoadModel) WithinLimits(customerId int64, amount int64, transactionTime time.Time) bool {
-
-	//This could be turned into a one liner but verbosity is often better for understanding and debugging
-	if m.hasExceededDailyLoadLimit(customerId, transactionTime, amount) {
-		return false
-	} else if m.hasExceededWeeklyLoadLimit(customerId, transactionTime, amount) {
-		return false
-	}
-
-	return true
-}
-
-//hasExceededDailyLoadLimit checks the two daily limits together as they are effectively related
-func (m *LoadModel) hasExceededDailyLoadLimit(customerId int64, transactionTime time.Time, transactionAmount int64) bool {
-	startDate := time.Date(transactionTime.Year(), transactionTime.Month(), transactionTime.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(transactionTime.Year(), transactionTime.Month(), transactionTime.Day(), 23, 59, 59, 999, time.UTC)
-	loadModels, err := m.GetByCustomerTransactionsByDateRange(customerId, startDate, endDate)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false
-		} else {
-			//This should pretty well never happen but safer to reject it than accept it
-			return true
-		}
-	}
-
-	if len(loadModels) >= 3 {
-		return true
-	}
-
-	amount := int64(0)
-	for _, load := range loadModels {
-		amount += load.Amount
-	}
-	amount += transactionAmount
-	if amount > 500000 {
-		return true
-	}
-	return false
 }
 
 func (m *LoadModel) hasExceededWeeklyLoadLimit(customerId int64, transactionTime time.Time, transactionAmount int64) bool {

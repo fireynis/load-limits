@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fireynis/velocity_checker/pkg/helpers"
 	"fireynis/velocity_checker/pkg/models"
 	"fireynis/velocity_checker/pkg/models/postgres"
+	"fireynis/velocity_checker/pkg/validators"
 	"flag"
 	"fmt"
 	"github.com/jackc/pgx/v4"
@@ -14,13 +16,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 )
 
 type application struct {
-	loads models.ILoads
+	loads         models.ILoads
+	loadValidator validators.ILoadValidator
 }
 
 func main() {
@@ -70,7 +71,8 @@ func main() {
 	defer dbConn.Close(context.Background())
 
 	app := &application{
-		loads: &postgres.LoadModel{DB: dbConn},
+		loads:         &postgres.LoadModel{DB: dbConn},
+		loadValidator: &validators.LoadValidator{},
 	}
 
 	app.parseFile(pathToFile, pathToOutFile)
@@ -111,7 +113,7 @@ func (a *application) parseFile(filePath, pathToOutFile string) {
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		var tempLoad importLoad
+		var tempLoad helpers.ImportLoad
 		err = json.Unmarshal(scanner.Bytes(), &tempLoad)
 
 		if err != nil {
@@ -119,30 +121,30 @@ func (a *application) parseFile(filePath, pathToOutFile string) {
 			continue
 		}
 
-		customerId, transactionId, intAmount, err := a.sanitizeInput(&tempLoad)
+		load, err := helpers.InputToLoad(tempLoad)
 
 		if err != nil {
 			log.Print(err)
 			continue
 		}
 
-		accepted, err := a.withinLimits(customerId, transactionId, intAmount, tempLoad.Time)
+		err = a.withinLimits(&load)
 
 		if err != nil {
 			log.Print(err)
 			continue
 		}
 
-		_, err = a.loads.Insert(customerId, transactionId, intAmount, tempLoad.Time, accepted)
+		_, err = a.loads.Insert(&load)
 		if err != nil {
 			log.Printf("Unable to insert into loads table. %s", err)
 			continue
 		}
 
 		outJson, err := json.Marshal(jsonOutput{
-			Id:         transactionId,
-			CustomerId: customerId,
-			Accepted:   accepted,
+			Id:         load.TransactionId,
+			CustomerId: load.CustomerId,
+			Accepted:   load.Accepted,
 		})
 		if err != nil {
 			log.Printf("Unable to marshall output json. %s", err)
@@ -157,44 +159,30 @@ func (a *application) parseFile(filePath, pathToOutFile string) {
 	}
 }
 
-func (a *application) sanitizeInput(tempLoad *importLoad) (customerId, transactionId, loadAmount int64, err error) {
-
-	transactionId, err = strconv.ParseInt(tempLoad.TransactionId, 10, 64)
-	if err != nil {
-		return 0, 0, 0, errors.New(fmt.Sprintf("unable to parse json. %s", err))
-	}
-
-	customerId, err = strconv.ParseInt(tempLoad.CustomerId, 10, 64)
-	if err != nil {
-		return 0, 0, 0, errors.New(fmt.Sprintf("unable to parse json. %s", err))
-	}
-
-	cleanedAmount, err := strconv.ParseFloat(strings.ReplaceAll(tempLoad.Amount, "$", ""), 64)
-	if err != nil {
-		return 0, 0, 0, errors.New(fmt.Sprintf("Unable to parse json.  %s", err))
-	}
-	loadAmount = int64(cleanedAmount * 100)
-	return customerId, transactionId, loadAmount, nil
-}
-
-func (a *application) withinLimits(customerId int64, transactionId int64, amount int64, transactionTime time.Time) (bool, error) {
-	_, err := a.loads.GetByTransactionId(customerId, transactionId)
+func (a *application) withinLimits(load *models.Load) error {
+	_, err := a.loads.GetByTransactionId(load.CustomerId, load.TransactionId)
 
 	//Ignoring a second load with the same id on a customer
 	if err == nil {
-		return false, errors.New("duplicate transaction")
+		return errors.New("duplicate transaction")
 	} else if !errors.Is(err, models.ErrNoRecord) {
-		errors.New(fmt.Sprintf("error checking for duplicate record. %s", err))
+		return errors.New(fmt.Sprintf("error checking for duplicate record. %s", err))
 	}
 
-	return a.loads.WithinLimits(customerId, amount, transactionTime), nil
-}
-
-type importLoad struct {
-	TransactionId string    `json:"id"`
-	CustomerId    string    `json:"customer_id"`
-	Amount        string    `json:"load_amount"`
-	Time          time.Time `json:"time"`
+	startDate := time.Date(load.Time.Year(), load.Time.Month(), load.Time.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(load.Time.Year(), load.Time.Month(), load.Time.Day(), 23, 59, 59, 999, time.UTC)
+	loadModels, err := a.loads.GetByCustomerTransactionsByDateRange(load.CustomerId, startDate, endDate)
+	if err != nil {
+		if errors.Is(err, models.ErrNoRecord) {
+			return nil
+		} else {
+			return err
+		}
+	}
+	load.Accepted = a.loadValidator.LessThanThreeLoadsDaily(loadModels) &&
+		a.loadValidator.LessThanFiveThousandLoadedDaily(loadModels, load) &&
+		a.loadValidator.LessThanTwentyThousandLoadedWeekly(loadModels, load)
+	return nil
 }
 
 type jsonOutput struct {
