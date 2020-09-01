@@ -20,14 +20,7 @@ import (
 )
 
 type application struct {
-	loads interface {
-		Get(id int64) (*models.Load, error)
-		GetByTransactionId(customerId int64, transactionId int64) (*models.Load, error)
-		GetByCustomerTransactionsByDateRange(customerId int64, startDate time.Time, endDate time.Time) ([]*models.Load, error)
-		Insert(customerId int64, transactionId int64, amount int64, transactionTime time.Time, accepted bool) (int64, error)
-		Update(model *models.Load) error
-		WithinLimits(customerId int64, amount int64, transactionTime time.Time) bool
-	}
+	loads models.ILoads
 }
 
 func main() {
