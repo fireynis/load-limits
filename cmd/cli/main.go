@@ -119,46 +119,30 @@ func (a *application) parseFile(filePath, pathToOutFile string) {
 			continue
 		}
 
-		transactionId, err := strconv.ParseInt(tempLoad.TransactionId, 10, 64)
+		customerId, transactionId, intAmount, err := a.sanitizeInput(&tempLoad)
+
 		if err != nil {
-			log.Printf("Unable to parse json. Line: %s. %s", scanner.Text(), err)
+			log.Print(err)
 			continue
 		}
 
-		customerId, err := strconv.ParseInt(tempLoad.CustomerId, 10, 64)
+		accepted, err := a.withinLimits(customerId, transactionId, intAmount, tempLoad.Time)
+
 		if err != nil {
-			log.Printf("Unable to parse json. Line: %s. %s", scanner.Text(), err)
+			log.Print(err)
 			continue
 		}
 
-		cleanedAmount, err := strconv.ParseFloat(strings.ReplaceAll(tempLoad.Amount, "$", ""), 64)
-		if err != nil {
-			log.Printf("Unable to parse json. Line: %s. %s", scanner.Text(), err)
-			continue
-		}
-		intAmount := int64(cleanedAmount * 100)
-
-		_, err = a.loads.GetByTransactionId(customerId, transactionId)
-
-		//Ignoring a second load with the same id on a customer
-		if err == nil {
-			log.Printf("Duplicate transaction. %s", scanner.Text())
-			continue
-		} else if !errors.Is(err, models.ErrNoRecord) {
-			log.Printf("Error checking for duplicate record. %s", err)
-		}
-
-		tempLoad.Accepted = a.loads.WithinLimits(customerId, intAmount, tempLoad.Time)
-
-		_, err = a.loads.Insert(customerId, transactionId, intAmount, tempLoad.Time, tempLoad.Accepted)
+		_, err = a.loads.Insert(customerId, transactionId, intAmount, tempLoad.Time, accepted)
 		if err != nil {
 			log.Printf("Unable to insert into loads table. %s", err)
 			continue
 		}
+
 		outJson, err := json.Marshal(jsonOutput{
 			Id:         transactionId,
 			CustomerId: customerId,
-			Accepted:   tempLoad.Accepted,
+			Accepted:   accepted,
 		})
 		if err != nil {
 			log.Printf("Unable to marshall output json. %s", err)
@@ -173,12 +157,44 @@ func (a *application) parseFile(filePath, pathToOutFile string) {
 	}
 }
 
+func (a *application) sanitizeInput(tempLoad *importLoad) (customerId, transactionId, loadAmount int64, err error) {
+
+	transactionId, err = strconv.ParseInt(tempLoad.TransactionId, 10, 64)
+	if err != nil {
+		return 0, 0, 0, errors.New(fmt.Sprintf("unable to parse json. %s", err))
+	}
+
+	customerId, err = strconv.ParseInt(tempLoad.CustomerId, 10, 64)
+	if err != nil {
+		return 0, 0, 0, errors.New(fmt.Sprintf("unable to parse json. %s", err))
+	}
+
+	cleanedAmount, err := strconv.ParseFloat(strings.ReplaceAll(tempLoad.Amount, "$", ""), 64)
+	if err != nil {
+		return 0, 0, 0, errors.New(fmt.Sprintf("Unable to parse json.  %s", err))
+	}
+	loadAmount = int64(cleanedAmount * 100)
+	return customerId, transactionId, loadAmount, nil
+}
+
+func (a *application) withinLimits(customerId int64, transactionId int64, amount int64, transactionTime time.Time) (bool, error) {
+	_, err := a.loads.GetByTransactionId(customerId, transactionId)
+
+	//Ignoring a second load with the same id on a customer
+	if err == nil {
+		return false, errors.New("duplicate transaction")
+	} else if !errors.Is(err, models.ErrNoRecord) {
+		errors.New(fmt.Sprintf("error checking for duplicate record. %s", err))
+	}
+
+	return a.loads.WithinLimits(customerId, amount, transactionTime), nil
+}
+
 type importLoad struct {
 	TransactionId string    `json:"id"`
 	CustomerId    string    `json:"customer_id"`
 	Amount        string    `json:"load_amount"`
 	Time          time.Time `json:"time"`
-	Accepted      bool      `json:"-"`
 }
 
 type jsonOutput struct {
