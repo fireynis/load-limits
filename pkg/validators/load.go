@@ -6,7 +6,8 @@ import (
 
 type LoadValidator struct{}
 
-//LessThanThreeLoadsDaily takes in an array of models that should all be from the same day
+//LessThanThreeLoadsDaily takes in an array of models that should all be from the same day. Basically it gets the
+//len of the models passed in
 func (l *LoadValidator) LessThanThreeLoadsDaily(loads []*models.Load) bool {
 	if len(loads) >= 3 {
 		return false
@@ -14,26 +15,22 @@ func (l *LoadValidator) LessThanThreeLoadsDaily(loads []*models.Load) bool {
 	return true
 }
 
+//LessThanFiveThousandLoadedDaily sums the accepted loads to determine if they exceed the daily 5k limit
 func (l *LoadValidator) LessThanFiveThousandLoadedDaily(loads []*models.Load, load *models.Load) bool {
-	if load.Amount > 500000 {
-		return false
-	}
-	amount := int64(0)
-	for _, load := range loads {
-		if !load.Accepted {
-			continue
-		}
-		amount += load.Amount
-	}
-	amount += load.Amount
-	if amount > 500000 {
-		return false
-	}
-	return true
+	return l.sumLessThanMax(loads, load, int64(500000))
 }
 
+//LessThanTwentyThousandLoadedWeekly sums the accepted loads
 func (l *LoadValidator) LessThanTwentyThousandLoadedWeekly(loads []*models.Load, load *models.Load) bool {
-	if load.Amount > 2000000 {
+	return l.sumLessThanMax(loads, load, int64(2000000))
+}
+
+func (l *LoadValidator) sumLessThanMax(loads []*models.Load, load *models.Load, maxAmount int64) bool {
+	//Short circuit if the cur value is higher than the daily limit. Don't need to waste the computation.
+	if load.Amount > maxAmount {
+		return false
+	}
+	if load.Amount > maxAmount {
 		return false
 	}
 	amount := int64(0)
@@ -41,7 +38,7 @@ func (l *LoadValidator) LessThanTwentyThousandLoadedWeekly(loads []*models.Load,
 		amount += load.Amount
 	}
 	amount += load.Amount
-	if amount > 2000000 {
+	if amount > maxAmount {
 		return false
 	}
 	return true
