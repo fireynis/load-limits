@@ -64,11 +64,7 @@ func main() {
 		loadValidator: &validators.LoadValidator{},
 	}
 
-	router := http.NewServeMux()
-
-	router.HandleFunc("/", app.parseLoad)
-
-	err = http.ListenAndServe(":"+port, router)
+	err = http.ListenAndServe(":"+port, app.routes())
 	log.Fatal(err)
 }
 
@@ -85,21 +81,21 @@ func (a *application) parseLoad(w http.ResponseWriter, r *http.Request) {
 	err := decoder.Decode(&inData)
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to parse json"), 403)
+		http.Error(w, fmt.Sprintf("Unable to parse json"), 400)
 		return
 	}
 
 	load, err := helpers.InputToLoad(inData)
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Data in is incorrect. %s", err), 403)
+		http.Error(w, fmt.Sprintf("Data in is incorrect. %s", err), 400)
 		return
 	}
 
 	_, err = a.loads.GetByTransactionId(load.CustomerId, load.TransactionId)
 	//Ignoring a second load with the same id on a customer
 	if err == nil {
-		http.Error(w, "Record already exists", 403)
+		http.Error(w, "Record already exists", 400)
 		return
 	} else if !errors.Is(err, models.ErrNoRecord) {
 		log.Printf("Error checking for duplicate record. %s", err)

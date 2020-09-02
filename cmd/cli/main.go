@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -142,8 +143,8 @@ func (a *application) parseFile(filePath, pathToOutFile string) {
 		}
 
 		outJson, err := json.Marshal(jsonOutput{
-			Id:         load.TransactionId,
-			CustomerId: load.CustomerId,
+			Id:         strconv.FormatInt(load.TransactionId, 10),
+			CustomerId: strconv.FormatInt(load.CustomerId, 10),
 			Accepted:   load.Accepted,
 		})
 		if err != nil {
@@ -164,7 +165,7 @@ func (a *application) withinLimits(load *models.Load) error {
 
 	//Ignoring a second load with the same id on a customer
 	if err == nil {
-		return errors.New("duplicate transaction")
+		return errors.New(fmt.Sprintf("duplicate transaction, %+v", load))
 	} else if !errors.Is(err, models.ErrNoRecord) {
 		return errors.New(fmt.Sprintf("error checking for duplicate record. %s", err))
 	}
@@ -186,7 +187,7 @@ func (a *application) withinLimits(load *models.Load) error {
 }
 
 type jsonOutput struct {
-	Id         int64 `json:"id"`
-	CustomerId int64 `json:"customer_id"`
-	Accepted   bool  `json:"accepted"`
+	Id         string `json:"id"`
+	CustomerId string `json:"customer_id"`
+	Accepted   bool   `json:"accepted"`
 }

@@ -15,8 +15,14 @@ func (l *LoadValidator) LessThanThreeLoadsDaily(loads []*models.Load) bool {
 }
 
 func (l *LoadValidator) LessThanFiveThousandLoadedDaily(loads []*models.Load, load *models.Load) bool {
+	if load.Amount > 500000 {
+		return false
+	}
 	amount := int64(0)
 	for _, load := range loads {
+		if !load.Accepted {
+			continue
+		}
 		amount += load.Amount
 	}
 	amount += load.Amount
@@ -27,6 +33,9 @@ func (l *LoadValidator) LessThanFiveThousandLoadedDaily(loads []*models.Load, lo
 }
 
 func (l *LoadValidator) LessThanTwentyThousandLoadedWeekly(loads []*models.Load, load *models.Load) bool {
+	if load.Amount > 2000000 {
+		return false
+	}
 	amount := int64(0)
 	for _, load := range loads {
 		amount += load.Amount
